@@ -6,9 +6,9 @@ import logging
 import polars as pl
 import typing
 
-logger = logging.getLogger(__file__)
+import constants
 
-DEFAULT_NUM_LINES = 10
+logger = logging.getLogger(__file__)
 
 def dict_map(f: typing.Callable, d: dict):
     """
@@ -30,7 +30,7 @@ def get_polars_type(value: str):
             return pl.Float32
         except ValueError:
             # missing data seems to be blank or null
-            if value.lower() in ["", "null"]:
+            if value in constants.null_values:
                 return pl.Null
             return pl.Utf8
 
@@ -54,32 +54,28 @@ def resolve_type(column, possible_types):
 
 
 
-def deduce_schema(file: str, num_lines: int = DEFAULT_NUM_LINES):
+def deduce_schema(file: str):
     """
-    Deduce the schema for `file` by reading the first `num_lines`
-    rows of data and attempting to determine their data type. Returns
+    Deduce the schema for `file` by reading in all rows of data in the
+    file and determining the type of each entry. Returns
     a dictionary mapping column names to the deduced polars data type.
     """
 
-    # read the first `num_lines` lines of data
-    with open(file, 'r') as f:
-        reader = csv.DictReader(f, delimiter='\t')
-        try:
-            rows = [next(reader) for _ in range(num_lines)]
-        except StopIteration:
-            logger.error(f"There are fewer than {num_lines} of data in {file}. Please choose a smaller number")
-
-    # dict to store all types that we see in the first `num_lines` lines
+    # dict to store all types that we see
     possible_schema: dict[str, set[pl.DataType]] = defaultdict(set)
 
-    for row in rows:
-        for (column, value) in row.items():
-            # attempt to parse literal
-            # will read ints/floats as the right type
-            t = get_polars_type(value)
-            if t not in possible_schema[column]:
-                logger.info(f"Found new type {t} in {column}: {value}")
-            possible_schema[column].add(t)
+    # read the data into a dictionary per row
+    with open(file, 'r') as f:
+        reader = csv.DictReader(f, delimiter='\t')
+
+        for row in reader:
+            for (column, value) in row.items():
+                # attempt to parse literal
+                # will read ints/floats as the right type
+                t = get_polars_type(value)
+                if t not in possible_schema[column]:
+                    logger.info(f"Found new type {t} in {column}: {value}")
+                possible_schema[column].add(t)
 
 
     schema = dict_map(resolve_type, possible_schema)
@@ -87,12 +83,12 @@ def deduce_schema(file: str, num_lines: int = DEFAULT_NUM_LINES):
     return schema
 
 
-def main(in_file: str, out_file: str, num_lines: int):
+def main(in_file: str, out_file: str):
     """
-    Deduce a schema in `in_file` based on `num_lines` of data
-    and store the result into an importable `out_file`
+    Deduce the schema of `in_file` and store the result
+    into an importable `out_file`
     """
-    schema = deduce_schema(in_file, num_lines)
+    schema = deduce_schema(in_file)
     with open(out_file, 'w') as f:
         f.write("import polars as pl\n")
         f.write("\n")
@@ -106,7 +102,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(__file__)
     parser.add_argument("input", help="Path to dataset file whose schema will be deduced")
     parser.add_argument("output", help="Path to write out schema")
-    parser.add_argument("--num_lines", "-n", help="Number of lines from file to read", default=DEFAULT_NUM_LINES, type=int)
     args = parser.parse_args()
 
-    main(args.input, args.output, args.num_lines)
+    main(args.input, args.output)
