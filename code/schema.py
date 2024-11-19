@@ -29,21 +29,28 @@ def get_polars_type(value: str):
             float(value)
             return pl.Float32
         except ValueError:
+            # missing data seems to be blank or null
+            if value.lower() in ["", "null"]:
+                return pl.Null
             return pl.Utf8
 
 def resolve_type(column, possible_types):
     """
     Convert from a set of possible types to a single deduced type
     """
-    if len(possible_types) > 1:
-        logger.warn(f"Found multiple possible types for {column}, will infer")
 
     # priority list. we assume that strings can store floats, which can store ints
     for t in [pl.Utf8, pl.Float32, pl.Int64]:
         if t in possible_types:
+            if len(possible_types) > 1:
+                logger.info(f"Found multiple possible types {possible_types} for {column}, inferring {t}")
             return t
 
-    raise RuntimeError("Should not reach this. Update list of types in this function")
+    # if it's just nulls, we can take it to be a string
+    if pl.Null in possible_types:
+        return pl.Utf8
+
+    raise RuntimeError("Should not reach this. Fix this function")
 
 
 
@@ -69,7 +76,10 @@ def deduce_schema(file: str, num_lines: int = DEFAULT_NUM_LINES):
         for (column, value) in row.items():
             # attempt to parse literal
             # will read ints/floats as the right type
-            possible_schema[column].add(get_polars_type(value))
+            t = get_polars_type(value)
+            if t not in possible_schema[column]:
+                logger.info(f"Found new type {t} in {column}: {value}")
+            possible_schema[column].add(t)
 
 
     schema = dict_map(resolve_type, possible_schema)
