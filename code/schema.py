@@ -8,7 +8,7 @@ import typing
 
 import constants
 
-logger = logging.getLogger(__file__)
+logger = logging.getLogger(__name__)
 
 def dict_map(f: typing.Callable, d: dict):
     """
@@ -43,7 +43,7 @@ def resolve_type(column, possible_types):
     for t in [pl.Utf8, pl.Float32, pl.Int64]:
         if t in possible_types:
             if len(possible_types) > 1:
-                logger.info(f"Found multiple possible types {possible_types} for {column}, inferring {t}")
+                logger.debug(f"Found multiple possible types {possible_types} for {column}, inferring {t}")
             return t
 
     # if it's just nulls, we can take it to be a string
@@ -74,7 +74,7 @@ def deduce_schema(file: str):
                 # will read ints/floats as the right type
                 t = get_polars_type(value)
                 if t not in possible_schema[column]:
-                    logger.info(f"Found new type {t} in {column}: {value}")
+                    logger.debug(f"Found new type {t} in {column}: {value}")
                 possible_schema[column].add(t)
 
 
