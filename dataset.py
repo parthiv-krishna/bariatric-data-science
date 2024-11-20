@@ -81,7 +81,9 @@ def deduce_schema(file: str) -> dict[str, pl.DataType]:
         if pl.Utf8 in possible_types:
             if len(possible_values) < MAX_CATEGORIES:
                 # categorical data
-                schema[column] = pl.Enum(list(sorted(possible_values)))
+                schema[column] = pl.Categorical
+                # enum would be ideal, but is not currently fully supported by polars
+                # schema[column] = pl.Enum(list(sorted(possible_values)))
             else:
                 # string data
                 schema[column] = pl.Utf8
@@ -119,6 +121,10 @@ def load_schema(schema_path: str) -> dict[str, pl.DataType]:
 
 
 def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
+    """
+    Loads the dataset in `in_file` using the schema in `schema_path`. If `schema_path`
+    is not provided, then deduce the schema.
+    """
     schema = (
         load_schema(schema_path) if schema_path is not None else deduce_schema(in_file)
     )
