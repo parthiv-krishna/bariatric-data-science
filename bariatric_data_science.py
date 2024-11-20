@@ -12,11 +12,16 @@ logger = logging.getLogger(__name__)
 def main(file: str, schema: str | None):
     logger.info("Loading dataset")
     data = dataset.load_dataset(file, schema)
-    logger.info("Filtering for POSTOPDEEPINCISIONALSSI")
 
-    # sometimes stored as Yes/No string, sometimes stored as 1/0 Int
-    infection = data.filter(pl.col("POSTOPDEEPINCISIONALSSI") == 1)
-    result = infection.select(["POSTOPDEEPINCISIONALSSI", "SEX", "RACE_PUF", "AGE", "agegt80"]).collect()
+    infection = data.filter(
+        (pl.col("POSTOPSUPERFICIALINCISIONALSSI") >= 1).or_(
+            pl.col("POSTOPDEEPINCISIONALSSI") >= 1,
+            pl.col("POSTOPORGANSPACESSI") >= 1,
+            pl.col("POSTOPSEPSIS") >= 1,
+            pl.col("POSTOPSEPTICSHOCK") >= 1,
+        )
+    )
+    result = infection.collect()
     logger.info(result)
 
 
