@@ -144,7 +144,7 @@ def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
             unique: pl.DataFrame = dataset.select(col).unique().collect()
             unique_set: set = set(unique[col].to_list())
             if unique_set == value_to_bool.keys():
-                logging.info(f"Converting {col} with type {schema[col]} to bool")
+                logging.debug(f"Converting {col} with type {schema[col]} to bool")
                 dataset = dataset.with_columns(
                     pl.col(col).replace_strict(value_to_bool).alias(col)
                 )
