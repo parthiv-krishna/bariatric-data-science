@@ -6,9 +6,9 @@ import logging
 import polars as pl
 import typing
 
-import constants
-
 logger = logging.getLogger(__name__)
+
+NULL_VALUES = ["", "null", "NULL"]
 
 def dict_map(f: typing.Callable, d: dict):
     """
@@ -30,7 +30,7 @@ def get_polars_type(value: str):
             return pl.Float32
         except ValueError:
             # missing data seems to be blank or null
-            if value in constants.null_values:
+            if value in NULL_VALUES:
                 return pl.Null
             return pl.Utf8
 
