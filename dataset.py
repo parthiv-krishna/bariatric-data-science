@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 MAX_CATEGORIES = 20
 # values that will be interpreted as null
 NULL_VALUES = ["", "null", "NULL"]
+# bool maps
+VALUE_TO_BOOL = {
+    pl.Int64: {0: False, 1: True},
+    pl.Categorical: {"No": False, "Yes": True}
+}
 
 
 def get_polars_type(value: str) -> pl.DataType:
@@ -129,9 +134,18 @@ def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
         load_schema(schema_path) if schema_path is not None else deduce_schema(in_file)
     )
 
-    dataset = pl.scan_csv(
+    dataset: pl.LazyFrame = pl.scan_csv(
         in_file, separator="\t", schema=schema, null_values=NULL_VALUES
     )
+
+    for col in schema:
+        if schema[col] in VALUE_TO_BOOL:
+            value_to_bool = VALUE_TO_BOOL[schema[col]]
+            unique: pl.DataFrame = dataset.select(col).unique().collect()
+            unique_set: set = set(unique[col].to_list())
+            if unique_set == value_to_bool.keys():
+                logging.info(f"Converting {col} with type {schema[col]} to bool")
+                dataset = dataset.with_columns(pl.col(col).replace_strict(value_to_bool).alias(col))
 
     return dataset
 

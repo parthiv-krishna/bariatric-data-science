@@ -3,34 +3,33 @@ import logging
 import numpy as np
 import polars as pl
 
-import constants
-import schema
+import dataset
 
+pl.enable_string_cache()
 logger = logging.getLogger(__name__)
 
 
-def main(file: str):
-    logger.info("Deducing schema")
-    deduced_schema = schema.deduce_schema(file)
-
+def main(file: str, schema: str | None):
     logger.info("Loading dataset")
-    dataset = pl.scan_csv(
-        file, separator="\t", schema=deduced_schema, null_values=constants.null_values
-    )
-
+    data = dataset.load_dataset(file, schema)
     logger.info("Filtering for POSTOPDEEPINCISIONALSSI")
 
     # sometimes stored as Yes/No string, sometimes stored as 1/0 Int
-    true_value = "Yes" if deduced_schema["POSTOPDEEPINCISIONALSSI"] == pl.Utf8 else 1
-    infection = dataset.filter(pl.col("POSTOPDEEPINCISIONALSSI") == true_value)
-    result = infection.collect()
+    infection = data.filter(pl.col("POSTOPDEEPINCISIONALSSI") == 1)
+    result = infection.select(["POSTOPDEEPINCISIONALSSI", "SEX", "RACE_PUF", "AGE", "agegt80"]).collect()
     logger.info(result)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(__file__)
     parser.add_argument("file", help="The path to the dataset file to analyze")
+    parser.add_argument(
+        "--schema",
+        "-s",
+        default=None,
+        help="The path to the dataset schema. If not present, schema will be deduced",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    main(args.file)
+    main(args.file, args.schema)
