@@ -8,16 +8,14 @@ import schema
 
 logger = logging.getLogger(__name__)
 
+
 def main(file: str):
     logger.info("Deducing schema")
     deduced_schema = schema.deduce_schema(file)
 
     logger.info("Loading dataset")
     dataset = pl.scan_csv(
-        file,
-        separator='\t',
-        schema=deduced_schema,
-        null_values=constants.null_values
+        file, separator="\t", schema=deduced_schema, null_values=constants.null_values
     )
 
     logger.info("Filtering for POSTOPDEEPINCISIONALSSI")

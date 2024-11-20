@@ -1,6 +1,7 @@
 { pkgs ? import <nixpkgs> {} }:
 let
   python-packages = ps: with ps; [
+    black
     numpy
     polars
     python-lsp-server
