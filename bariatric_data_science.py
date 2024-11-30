@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 COMORBIDITIES = [
     "SMOKER",
-    # "DIABETES",
+    "DIABETES_INSULIN_BOOL",
+    "DIABETES_NONINSULIN_BOOL",
     "CHRONIC_STEROIDS",
     "COPD",
     "HISTORY_PE",
@@ -21,13 +22,13 @@ COMORBIDITIES = [
     "PTC",
     "PCARD",
     "HIP",
-    # "NBHTN_MEDS",
+    "HTN_MEDS_BOOL",
     "HYPERLIPIDEMIA",
     "HISTORY_DVT",
     "THERAPEUTIC_ANTICOAGULATION",
     "VENOUS_STASIS",
     "IVC_FILTER",
-    # "IVC_TIMING",
+    "IVC_TIMING_BOOL",
     "DIALYSIS",
     "RENAL_INSUFFICIENCY",
     "PROGRSRENALINSUF",
@@ -86,6 +87,9 @@ def main(file: str, schema: str | None):
         f"Of {len(COMORBIDITIES)} comorbidities, {comorbidity_worse} increased likelihood of infection"
     )
     logger.warning("TODO: Check statistical significance!")
+    is_control = pl.Expr.and_(*[pl.col(c) == False for c in COMORBIDITIES])
+    control = data.filter(is_control).collect()
+    logger.info(f"Control size: {control.height}")
 
 
 if __name__ == "__main__":

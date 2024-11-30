@@ -125,6 +125,34 @@ def load_schema(schema_path: str) -> dict[str, pl.DataType]:
     return schema.SCHEMA
 
 
+def booleanize(dataset: pl.LazyFrame) -> pl.LazyFrame:
+    """Converts data fields with non-bool entries to bools"""
+
+    # automatically infer booleans for Yes/No or 1/0 data
+    for col in schema:
+        if schema[col] in VALUE_TO_BOOL:
+            value_to_bool = VALUE_TO_BOOL[schema[col]]
+            unique: pl.DataFrame = dataset.select(col).unique().collect()
+            unique_set: set = set(unique[col].to_list())
+            if unique_set == value_to_bool.keys():
+                logging.debug(f"Converting {col} with type {schema[col]} to bool")
+                dataset = dataset.with_columns(
+                    pl.col(col).replace_strict(value_to_bool).alias(col)
+                )
+
+    # manual mapping of a few columns
+    dataset = data.with_columns(
+        [
+            (pl.col("DIABETES") == "Insulin").alias("DIABETES_INSULIN_BOOL"),
+            (pl.col("DIABETES") == "Non-Insulin").alias("DIABETES_NONINSULIN_BOOL"),
+            (pl.col("HTN_MEDS") != "0").alias("HTN_MEDS_BOOL"),
+            (pl.col("IVC_TIMING").is_not_null()).alias("IVC_TIMING_BOOL"),
+        ]
+    )
+
+    return dataset
+
+
 def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
     """
     Loads the dataset in `in_file` using the schema in `schema_path`. If `schema_path`
@@ -138,18 +166,7 @@ def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
         in_file, separator="\t", schema=schema, null_values=NULL_VALUES
     )
 
-    for col in schema:
-        if schema[col] in VALUE_TO_BOOL:
-            value_to_bool = VALUE_TO_BOOL[schema[col]]
-            unique: pl.DataFrame = dataset.select(col).unique().collect()
-            unique_set: set = set(unique[col].to_list())
-            if unique_set == value_to_bool.keys():
-                logging.debug(f"Converting {col} with type {schema[col]} to bool")
-                dataset = dataset.with_columns(
-                    pl.col(col).replace_strict(value_to_bool).alias(col)
-                )
-
-    return dataset
+    return booleanize(dataset)
 
 
 def main(in_file: str, out_file: str):
