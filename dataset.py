@@ -125,7 +125,7 @@ def load_schema(schema_path: str) -> dict[str, pl.DataType]:
     return schema.SCHEMA
 
 
-def booleanize(dataset: pl.LazyFrame) -> pl.LazyFrame:
+def preprocess(dataset: pl.LazyFrame, schema: dict[str, pl.DataType]) -> pl.LazyFrame:
     """Converts data fields with non-bool entries to bools"""
 
     # automatically infer booleans for Yes/No or 1/0 data
@@ -141,11 +141,16 @@ def booleanize(dataset: pl.LazyFrame) -> pl.LazyFrame:
                 )
 
     # manual mapping of a few columns
-    dataset = data.with_columns(
+    htn_meds_col = "HTN_MEDS" if "HTN_MEDS" in schema else "NBHTN_MEDS"
+    dataset = dataset.with_columns(
         [
-            (pl.col("DIABETES") == "Insulin").alias("DIABETES_INSULIN_BOOL"),
-            (pl.col("DIABETES") == "Non-Insulin").alias("DIABETES_NONINSULIN_BOOL"),
-            (pl.col("HTN_MEDS") != "0").alias("HTN_MEDS_BOOL"),
+            (pl.col("DIABETES").is_in(["Insulin", "Yes, insulin"])).alias(
+                "DIABETES_INSULIN_BOOL"
+            ),
+            (pl.col("DIABETES").is_in(["Non-Insulin", "Yes, non-insulin"])).alias(
+                "DIABETES_NONINSULIN_BOOL"
+            ),
+            (pl.col(htn_meds_col) != "0").alias("HTN_MEDS_BOOL"),
             (pl.col("IVC_TIMING").is_not_null()).alias("IVC_TIMING_BOOL"),
         ]
     )
@@ -166,7 +171,7 @@ def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
         in_file, separator="\t", schema=schema, null_values=NULL_VALUES
     )
 
-    return booleanize(dataset)
+    return preprocess(dataset, schema)
 
 
 def main(in_file: str, out_file: str):
