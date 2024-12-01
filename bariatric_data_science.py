@@ -120,10 +120,10 @@ def main(in_file: str, out_file: str, schema: str | None):
         "infected_not_comorbid": pl.Int64,
         "not_infected_comorbid": pl.Int64,
         "not_infected_not_comorbid": pl.Int64,
-        "chi2_not_comorbid": pl.Float32,
-        "pvalue_not_comorbid": pl.Float32,
-        "chi2_control": pl.Float32,
-        "pvalue_control": pl.Float32
+        "chi2_not_comorbid": pl.Float64,
+        "pvalue_not_comorbid": pl.Float64,
+        "chi2_control": pl.Float64,
+        "pvalue_control": pl.Float64
     })
     results_df.write_csv(out_file)
 

@@ -33,7 +33,7 @@ def get_polars_type(value: str) -> pl.DataType:
     except ValueError:
         try:
             float(value)
-            return pl.Float32
+            return pl.Float64
         except ValueError:
             # missing data seems to be blank or null
             if value in NULL_VALUES:
@@ -93,9 +93,9 @@ def deduce_schema(file: str) -> dict[str, pl.DataType]:
                 # string data
                 schema[column] = pl.Utf8
 
-        elif pl.Float32 in possible_types:
+        elif pl.Float64 in possible_types:
             # float data
-            schema[column] = pl.Float32
+            schema[column] = pl.Float64
         elif pl.Int64 in possible_types:
             # int data
             schema[column] = pl.Int64
