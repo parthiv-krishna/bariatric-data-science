@@ -5,6 +5,7 @@ let
     numpy
     polars
     python-lsp-server
+    scipy
   ];
   python-with-packages = pkgs.python3.withPackages python-packages;
 in pkgs.mkShell {

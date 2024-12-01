@@ -2,6 +2,7 @@ import argparse
 import logging
 import numpy as np
 import polars as pl
+import scipy.stats
 
 import dataset
 
@@ -44,37 +45,65 @@ INFECTION = [
 ]
 
 
-def main(file: str, schema: str | None):
-    logger.info(f"Loading dataset from {file}")
-    data = dataset.load_dataset(file, schema)
+def main(in_file: str, out_file: str, schema: str | None):
+    logger.info(f"Loading dataset from {in_file}")
+    data = dataset.load_dataset(in_file, schema)
 
+    results = []
     # if any of the infection columns are >= 1, this is true
     is_infected = pl.Expr.or_(*[pl.col(c) >= 1 for c in INFECTION])
 
+    # control group
+    is_control = pl.Expr.and_(*[pl.col(c) == False for c in COMORBIDITIES])
+    infected_control = data.filter(is_infected).filter(is_control).collect().height
+    not_infected_control = data.filter(~is_infected).filter(is_control).collect().height
+    logger.info(f"Control group: {infected_control=} {not_infected_control=}")
+
     comorbidity_worse = 0
     for comorbidity in COMORBIDITIES:
+        result = {
+            "comorbidity_name": comorbidity
+        }
+
         is_comorbid = pl.col(comorbidity)
 
         # counts of each of the four cases {infected, not_infected} x {comorbid, not_comorbid}
-        infected_and_comorbid = (
+        result["infected_comorbid"] = (
             data.filter(is_infected).filter(is_comorbid).collect().height
         )
-        infected_and_not_comorbid = (
+        result["infected_not_comorbid"] = (
             data.filter(is_infected).filter(~is_comorbid).collect().height
         )
-        not_infected_and_comorbid = (
+        result["not_infected_comorbid"] = (
             data.filter(~is_infected).filter(is_comorbid).collect().height
         )
-        not_infected_and_not_comorbid = (
+        result["not_infected_not_comorbid"] = (
             data.filter(~is_infected).filter(~is_comorbid).collect().height
         )
 
+        # observation table for chi2 analysis comparing comorbid vs not_comorbid
+        observation_not_comorbid = [
+                [result["infected_comorbid"], result["infected_not_comorbid"]],
+                [result["not_infected_comorbid"], result["not_infected_not_comorbid"]]
+        ]
+        chi2_result_not_comorbid = scipy.stats.chi2_contingency(observation_not_comorbid)
+        result["chi2_not_comorbid"] = chi2_result_not_comorbid.statistic
+        result["pvalue_not_comorbid"] = chi2_result_not_comorbid.pvalue
+        # observation table for chi2 analysis comparing comorbid vs control
+        observation_control = [
+                [result["infected_comorbid"], infected_control],
+                [result["not_infected_comorbid"], not_infected_control]
+        ]
+        chi2_result_control = scipy.stats.chi2_contingency(observation_control)
+        result["chi2_control"] = chi2_result_control.statistic
+        result["pvalue_control"] = chi2_result_control.pvalue
+
         # probability of infection, conditioned on being comorbid or not
-        p_infected_given_comorbid = infected_and_comorbid / (
-            infected_and_comorbid + not_infected_and_comorbid
+        p_infected_given_comorbid = result["infected_comorbid"] / (
+            result["infected_comorbid"] + result["not_infected_comorbid"]
         )
-        p_infected_given_not_cormorbid = infected_and_not_comorbid / (
-            infected_and_not_comorbid + not_infected_and_not_comorbid
+        p_infected_given_not_cormorbid = result["infected_not_comorbid"] / (
+            result["infected_not_comorbid"] + result["not_infected_not_comorbid"]
         )
 
         logger.info(
@@ -83,18 +112,30 @@ def main(file: str, schema: str | None):
         if p_infected_given_comorbid > p_infected_given_not_cormorbid:
             comorbidity_worse += 1
 
+        results.append(result)
+
+    results_df = pl.DataFrame(results, {
+        "comorbidity_name": pl.Utf8,
+        "infected_comorbid": pl.Int64,
+        "infected_not_comorbid": pl.Int64,
+        "not_infected_comorbid": pl.Int64,
+        "not_infected_not_comorbid": pl.Int64,
+        "chi2_not_comorbid": pl.Float32,
+        "pvalue_not_comorbid": pl.Float32,
+        "chi2_control": pl.Float32,
+        "pvalue_control": pl.Float32
+    })
+    results_df.write_csv(out_file)
+
     logger.info(
         f"Of {len(COMORBIDITIES)} comorbidities, {comorbidity_worse} increased likelihood of infection"
     )
-    logger.warning("TODO: Check statistical significance!")
-    is_control = pl.Expr.and_(*[pl.col(c) == False for c in COMORBIDITIES])
-    control = data.filter(is_control).collect()
-    logger.info(f"Control size: {control.height}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(__file__)
-    parser.add_argument("file", help="The path to the dataset file to analyze")
+    parser.add_argument("input", help="The path to the dataset file to analyze")
+    parser.add_argument("output", help="The path to the csv to write out")
     parser.add_argument(
         "--schema",
         "-s",
@@ -104,4 +145,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    main(args.file, args.schema)
+    main(args.input, args.output, args.schema)
