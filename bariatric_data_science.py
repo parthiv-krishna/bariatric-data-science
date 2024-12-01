@@ -49,18 +49,27 @@ def main(in_file: str, out_file: str, schema: str | None):
     logger.info(f"Loading dataset from {in_file}")
     data = dataset.load_dataset(in_file, schema)
 
-    results = []
     # if any of the infection columns are >= 1, this is true
     is_infected = pl.Expr.or_(*[pl.col(c) >= 1 for c in INFECTION])
 
     # control group
     is_control = pl.Expr.and_(*[pl.col(c) == False for c in COMORBIDITIES])
     infected_control = data.filter(is_infected).filter(is_control).collect().height
+    infected_not_control = data.filter(is_infected).filter(~is_control).collect().height
     not_infected_control = data.filter(~is_infected).filter(is_control).collect().height
+    not_infected_not_control = data.filter(~is_infected).filter(~is_control).collect().height
     logger.info(f"Control group: {infected_control=} {not_infected_control=}")
 
-    comorbidity_worse = 0
+    # generate stats for patients with any comorbidity and control (no comorbidity)
+    data = data.with_columns([
+        ~is_control.alias("ANY_COMORBIDITY"),
+        is_control.alias("CONTROL")
+        ])
+    COMORBIDITIES.extend(["ANY_COMORBIDITY", "CONTROL"])
+
+    results = []
     for comorbidity in COMORBIDITIES:
+        logger.info(f"Analyzing {comorbidity}")
         result = {
             "comorbidity_name": comorbidity
         }
@@ -81,7 +90,7 @@ def main(in_file: str, out_file: str, schema: str | None):
             data.filter(~is_infected).filter(~is_comorbid).collect().height
         )
 
-        # observation table for chi2 analysis comparing comorbid vs not_comorbid
+        # chi2 analysis comparing comorbid vs not_comorbid
         observation_not_comorbid = [
                 [result["infected_comorbid"], result["infected_not_comorbid"]],
                 [result["not_infected_comorbid"], result["not_infected_not_comorbid"]]
@@ -89,7 +98,8 @@ def main(in_file: str, out_file: str, schema: str | None):
         chi2_result_not_comorbid = scipy.stats.chi2_contingency(observation_not_comorbid)
         result["chi2_not_comorbid"] = chi2_result_not_comorbid.statistic
         result["pvalue_not_comorbid"] = chi2_result_not_comorbid.pvalue
-        # observation table for chi2 analysis comparing comorbid vs control
+
+        # chi2 analysis comparing comorbid vs control
         observation_control = [
                 [result["infected_comorbid"], infected_control],
                 [result["not_infected_comorbid"], not_infected_control]
@@ -99,18 +109,12 @@ def main(in_file: str, out_file: str, schema: str | None):
         result["pvalue_control"] = chi2_result_control.pvalue
 
         # probability of infection, conditioned on being comorbid or not
-        p_infected_given_comorbid = result["infected_comorbid"] / (
+        result["p_infected_given_comorbid"] = result["infected_comorbid"] / (
             result["infected_comorbid"] + result["not_infected_comorbid"]
         )
-        p_infected_given_not_cormorbid = result["infected_not_comorbid"] / (
+        result["p_infected_given_not_comorbid"] = result["infected_not_comorbid"] / (
             result["infected_not_comorbid"] + result["not_infected_not_comorbid"]
         )
-
-        logger.info(
-            f"For comorbidity {comorbidity}, P(infected|{comorbidity})={p_infected_given_comorbid*100:.2f}%, P(infected|not {comorbidity})={p_infected_given_not_cormorbid*100:.2f}%"
-        )
-        if p_infected_given_comorbid > p_infected_given_not_cormorbid:
-            comorbidity_worse += 1
 
         results.append(result)
 
@@ -120,16 +124,15 @@ def main(in_file: str, out_file: str, schema: str | None):
         "infected_not_comorbid": pl.Int64,
         "not_infected_comorbid": pl.Int64,
         "not_infected_not_comorbid": pl.Int64,
+        "p_infected_given_comorbid": pl.Float64,
+        "p_infected_given_not_comorbid": pl.Float64,
         "chi2_not_comorbid": pl.Float64,
         "pvalue_not_comorbid": pl.Float64,
         "chi2_control": pl.Float64,
         "pvalue_control": pl.Float64
     })
     results_df.write_csv(out_file)
-
-    logger.info(
-        f"Of {len(COMORBIDITIES)} comorbidities, {comorbidity_worse} increased likelihood of infection"
-    )
+    logger.info(f"Wrote results to {out_file}")
 
 
 if __name__ == "__main__":
