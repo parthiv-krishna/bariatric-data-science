@@ -10,30 +10,30 @@ pl.enable_string_cache()
 logger = logging.getLogger(__name__)
 
 COMORBIDITIES = [
-    "SMOKER",
-    "DIABETES_INSULIN_BOOL",
-    "DIABETES_NONINSULIN_BOOL",
-    "CHRONIC_STEROIDS",
-    "COPD",
-    "HISTORY_PE",
-    "SLEEP_APNEA",
-    "GERD",
-    "PREVIOUS_SURGERY",
-    "MI_ALL_HISTORY",
-    "PTC",
-    "PCARD",
-    "HIP",
-    "HTN_MEDS_BOOL",
-    "HYPERLIPIDEMIA",
-    "HISTORY_DVT",
-    "THERAPEUTIC_ANTICOAGULATION",
-    "VENOUS_STASIS",
-    "IVC_FILTER",
-    "IVC_TIMING_BOOL",
-    "DIALYSIS",
-    "RENAL_INSUFFICIENCY",
+    #     "SMOKER",
+    #     "DIABETES_INSULIN_BOOL",
+    #     "DIABETES_NONINSULIN_BOOL",
+    #     "CHRONIC_STEROIDS",
+    #     "COPD",
+    #     "HISTORY_PE",
+    #     "SLEEP_APNEA",
+    #     "GERD",
+    #     "PREVIOUS_SURGERY",
+    #     "MI_ALL_HISTORY",
+    #     "PTC",
+    #     "PCARD",
+    #     "HIP",
+    #     "HTN_MEDS_BOOL",
+    #     "HYPERLIPIDEMIA",
+    #     "HISTORY_DVT",
+    #     "THERAPEUTIC_ANTICOAGULATION",
+    #     "VENOUS_STASIS",
+    #     "IVC_FILTER",
+    #     "IVC_TIMING_BOOL",
+    #     "DIALYSIS",
+    #     "RENAL_INSUFFICIENCY",
     "PROGRSRENALINSUF",
-    "ACTERENALFAILURE",
+    # "ACTERENALFAILURE",
 ]
 
 INFECTION = [
@@ -43,6 +43,59 @@ INFECTION = [
     "POSTOPSEPSIS",
     "POSTOPSEPTICSHOCK",
 ]
+
+
+def postprocess(in_results: dict[str, dict[str, int]]) -> pl.DataFrame:
+    """
+    Postprocess data in dict form and convert to a DataFrame with chi2 analysis
+    """
+    # list of dictionaries, each representing a row in the final dataframe
+    out_results = []
+    control = in_results["CONTROL"]
+    for comorbidity, in_result in in_results.items():
+        # construct out_results dict 
+        out_result = {}
+        out_result["name"] = comorbidity
+        out_result.update(in_result)
+
+        # probability of infection, conditioned on being comorbid or not
+        out_result["p_infected_given_comorbid"] = out_result["infected_comorbid"] / (
+            out_result["infected_comorbid"] + out_result["not_infected_comorbid"]
+        )
+        out_result["p_infected_given_not_comorbid"] = out_result[
+            "infected_not_comorbid"
+        ] / (
+            out_result["infected_not_comorbid"]
+            + out_result["not_infected_not_comorbid"]
+        )
+
+        # chi2 analysis comparing comorbid vs not_comorbid
+        observation_not_comorbid = [
+            [out_result["infected_comorbid"], out_result["infected_not_comorbid"]],
+            [
+                out_result["not_infected_comorbid"],
+                out_result["not_infected_not_comorbid"],
+            ],
+        ]
+        chi2_result_not_comorbid = scipy.stats.chi2_contingency(
+            observation_not_comorbid
+        )
+        out_result["chi2_not_comorbid"] = chi2_result_not_comorbid.statistic
+        out_result["pvalue_not_comorbid"] = chi2_result_not_comorbid.pvalue
+
+        # chi2 analysis comparing comorbid vs control
+        observation_control = [
+            [out_result["infected_comorbid"], control["infected_comorbid"]],
+            [out_result["not_infected_comorbid"], control["not_infected_comorbid"]],
+        ]
+        chi2_result_control = scipy.stats.chi2_contingency(observation_control)
+        out_result["chi2_control"] = chi2_result_control.statistic
+        out_result["pvalue_control"] = chi2_result_control.pvalue
+
+        out_results.append(out_result)
+
+    # convert to dataframe
+    return pl.DataFrame(out_results)
 
 
 def main(in_file: str, out_file: str, schema: str | None):
@@ -57,81 +110,45 @@ def main(in_file: str, out_file: str, schema: str | None):
     infected_control = data.filter(is_infected).filter(is_control).collect().height
     infected_not_control = data.filter(is_infected).filter(~is_control).collect().height
     not_infected_control = data.filter(~is_infected).filter(is_control).collect().height
-    not_infected_not_control = data.filter(~is_infected).filter(~is_control).collect().height
+    not_infected_not_control = (
+        data.filter(~is_infected).filter(~is_control).collect().height
+    )
     logger.info(f"Control group: {infected_control=} {not_infected_control=}")
 
     # generate stats for patients with any comorbidity and control (no comorbidity)
-    data = data.with_columns([
-        ~is_control.alias("ANY_COMORBIDITY"),
-        is_control.alias("CONTROL")
-        ])
+    data = data.with_columns(
+        [~is_control.alias("ANY_COMORBIDITY"), is_control.alias("CONTROL")]
+    )
     COMORBIDITIES.extend(["ANY_COMORBIDITY", "CONTROL"])
 
-    results = []
+    results = {}
     for comorbidity in COMORBIDITIES:
         logger.info(f"Analyzing {comorbidity}")
-        result = {
-            "comorbidity_name": comorbidity
-        }
-
         is_comorbid = pl.col(comorbidity)
 
-        # counts of each of the four cases {infected, not_infected} x {comorbid, not_comorbid}
-        result["infected_comorbid"] = (
-            data.filter(is_infected).filter(is_comorbid).collect().height
-        )
-        result["infected_not_comorbid"] = (
-            data.filter(is_infected).filter(~is_comorbid).collect().height
-        )
-        result["not_infected_comorbid"] = (
-            data.filter(~is_infected).filter(is_comorbid).collect().height
-        )
-        result["not_infected_not_comorbid"] = (
-            data.filter(~is_infected).filter(~is_comorbid).collect().height
-        )
+        # counts of each of the four cases
+        # {infected, not_infected} x {comorbid, not_comorbid}
+        results[comorbidity] = {
+            "infected_comorbid": data.filter(is_infected)
+            .filter(is_comorbid)
+            .collect()
+            .height,
+            "not_infected_comorbid": data.filter(~is_infected)
+            .filter(is_comorbid)
+            .collect()
+            .height,
+            "infected_not_comorbid": data.filter(is_infected)
+            .filter(~is_comorbid)
+            .collect()
+            .height,
+            "not_infected_not_comorbid": data.filter(~is_infected)
+            .filter(~is_comorbid)
+            .collect()
+            .height,
+        }
 
-        # chi2 analysis comparing comorbid vs not_comorbid
-        observation_not_comorbid = [
-                [result["infected_comorbid"], result["infected_not_comorbid"]],
-                [result["not_infected_comorbid"], result["not_infected_not_comorbid"]]
-        ]
-        chi2_result_not_comorbid = scipy.stats.chi2_contingency(observation_not_comorbid)
-        result["chi2_not_comorbid"] = chi2_result_not_comorbid.statistic
-        result["pvalue_not_comorbid"] = chi2_result_not_comorbid.pvalue
-
-        # chi2 analysis comparing comorbid vs control
-        observation_control = [
-                [result["infected_comorbid"], infected_control],
-                [result["not_infected_comorbid"], not_infected_control]
-        ]
-        chi2_result_control = scipy.stats.chi2_contingency(observation_control)
-        result["chi2_control"] = chi2_result_control.statistic
-        result["pvalue_control"] = chi2_result_control.pvalue
-
-        # probability of infection, conditioned on being comorbid or not
-        result["p_infected_given_comorbid"] = result["infected_comorbid"] / (
-            result["infected_comorbid"] + result["not_infected_comorbid"]
-        )
-        result["p_infected_given_not_comorbid"] = result["infected_not_comorbid"] / (
-            result["infected_not_comorbid"] + result["not_infected_not_comorbid"]
-        )
-
-        results.append(result)
-
-    results_df = pl.DataFrame(results, {
-        "comorbidity_name": pl.Utf8,
-        "infected_comorbid": pl.Int64,
-        "infected_not_comorbid": pl.Int64,
-        "not_infected_comorbid": pl.Int64,
-        "not_infected_not_comorbid": pl.Int64,
-        "p_infected_given_comorbid": pl.Float64,
-        "p_infected_given_not_comorbid": pl.Float64,
-        "chi2_not_comorbid": pl.Float64,
-        "pvalue_not_comorbid": pl.Float64,
-        "chi2_control": pl.Float64,
-        "pvalue_control": pl.Float64
-    })
-    results_df.write_csv(out_file)
+    # postprocess and write out to out_file
+    postprocess(results).write_csv(out_file)
     logger.info(f"Wrote results to {out_file}")
 
 
