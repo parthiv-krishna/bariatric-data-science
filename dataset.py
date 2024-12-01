@@ -171,7 +171,7 @@ def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
         in_file, separator="\t", schema=schema, null_values=NULL_VALUES
     )
 
-    return preprocess(dataset, schema)
+    return preprocess(dataset, schema), schema
 
 
 def main(in_file: str, out_file: str):
