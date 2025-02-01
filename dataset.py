@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # max number of unique entries in a categorical data type
 MAX_CATEGORIES = 20
 # values that will be interpreted as null
-NULL_VALUES = ["", "null", "NULL"]
+NULL_VALUES = ["", "null", "NULL", "Null", "unknown", "UNKNOWN", "Unknown"]
 # bool maps
 VALUE_TO_BOOL = {
     pl.Int64: {0: False, 1: True},
@@ -131,14 +131,19 @@ def preprocess(dataset: pl.LazyFrame, schema: dict[str, pl.DataType]) -> pl.Lazy
     # automatically infer booleans for Yes/No or 1/0 data
     for col in schema:
         if schema[col] in VALUE_TO_BOOL:
-            value_to_bool = VALUE_TO_BOOL[schema[col]]
+            # don't consider nulls as values when checking if it's a boolean
             unique: pl.DataFrame = dataset.select(col).unique().collect()
-            unique_set: set = set(unique[col].to_list())
+            unique_set: set = set(unique[col].to_list()) - {None}
+
+            value_to_bool = VALUE_TO_BOOL[schema[col]]
             if unique_set == value_to_bool.keys():
                 logging.debug(f"Converting {col} with type {schema[col]} to bool")
                 dataset = dataset.with_columns(
-                    pl.col(col).replace_strict(value_to_bool).alias(col)
+                    [
+                        pl.col(col).replace_strict(value_to_bool).alias(col),
+                    ]
                 )
+                schema[col] = pl.Boolean
 
     # manual mapping of a few columns
     htn_meds_col = "HTN_MEDS" if "HTN_MEDS" in schema else "NBHTN_MEDS"
@@ -158,7 +163,9 @@ def preprocess(dataset: pl.LazyFrame, schema: dict[str, pl.DataType]) -> pl.Lazy
     return dataset
 
 
-def load_dataset(in_file, schema_path=None) -> pl.LazyFrame:
+def load_dataset(
+    in_file, schema_path=None
+) -> tuple[pl.LazyFrame, dict[str, pl.DataType]]:
     """
     Loads the dataset in `in_file` using the schema in `schema_path`. If `schema_path`
     is not provided, then deduce the schema.
