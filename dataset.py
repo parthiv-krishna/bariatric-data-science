@@ -125,7 +125,9 @@ def load_schema(schema_path: str) -> dict[str, pl.DataType]:
     return schema.SCHEMA
 
 
-def preprocess(dataset: pl.LazyFrame, schema: dict[str, pl.DataType]) -> pl.LazyFrame:
+def preprocess(
+    dataset: pl.LazyFrame, schema: dict[str, pl.DataType]
+) -> tuple[pl.LazyFrame, dict[str, pl.DataType]]:
     """Converts data fields with non-bool entries to bools"""
 
     # automatically infer booleans for Yes/No or 1/0 data
@@ -159,8 +161,12 @@ def preprocess(dataset: pl.LazyFrame, schema: dict[str, pl.DataType]) -> pl.Lazy
             (pl.col("IVC_TIMING").is_not_null()).alias("IVC_TIMING_BOOL"),
         ]
     )
+    schema["DIABETES_INSULIN_BOOL"] = pl.Boolean
+    schema["DIABETES_NONINSULIN_BOOL"] = pl.Boolean
+    schema["HTN_MEDS_BOOL"] = pl.Boolean
+    schema["IVC_TIMING_BOOL"] = pl.Boolean
 
-    return dataset
+    return dataset, schema
 
 
 def load_dataset(
@@ -178,7 +184,7 @@ def load_dataset(
         in_file, separator="\t", schema=schema, null_values=NULL_VALUES
     )
 
-    return preprocess(dataset, schema), schema
+    return preprocess(dataset, schema)
 
 
 def main(in_file: str, out_file: str):
