@@ -3,8 +3,11 @@ let
   python-packages = ps: with ps; [
     black
     numpy
+    pandas
     polars
+    pyarrow
     python-lsp-server
+    scikit-learn
     scipy
   ];
   python-with-packages = pkgs.python3.withPackages python-packages;
