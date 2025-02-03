@@ -12,9 +12,20 @@ import typing
 logger = logging.getLogger(__name__)
 
 # max number of unique entries in a categorical data type
-MAX_CATEGORIES = 8
+MAX_CATEGORIES = 20
 # values that will be interpreted as null
-NULL_VALUES = ["", "null", "NULL", "Null", "unknown", "UNKNOWN", "Unknown", "none", "NONE", "None"]
+NULL_VALUES = [
+    "",
+    "null",
+    "NULL",
+    "Null",
+    "unknown",
+    "UNKNOWN",
+    "Unknown",
+    "none",
+    "NONE",
+    "None",
+]
 # bool maps
 VALUE_TO_BOOL = {
     pl.Int64: {0: False, 1: True},
@@ -151,6 +162,7 @@ def preprocess(
     htn_meds_col = "HTN_MEDS" if "HTN_MEDS" in schema else "NBHTN_MEDS"
     dataset = dataset.with_columns(
         [
+            (pl.col("AGE").floor().cast(pl.Int64)).alias("AGE"),
             (pl.col("DIABETES").is_in(["Insulin", "Yes, insulin"])).alias(
                 "DIABETES_INSULIN_BOOL"
             ),
@@ -159,11 +171,9 @@ def preprocess(
             ),
             (pl.col(htn_meds_col) != "0").alias("HTN_MEDS_BOOL"),
             (pl.col("IVC_TIMING").is_not_null()).alias("IVC_TIMING_BOOL"),
-            (pl.col("SURGICAL_APPROACH") == "Endoscopic").alias("SURGICAL_APPROACH_ENDOSCOPIC"),
-            (pl.col("SURGICAL_APPROACH") == "Laparoscopic").alias("SURGICAL_APPROACH_LAPAROSCOPIC"),
-            (pl.col("SURGICAL_APPROACH") == "Open").alias("SURGICAL_APPROACH_OPEN")
         ]
     )
+    schema["AGE"] = pl.Int64
     schema["DIABETES_INSULIN_BOOL"] = pl.Boolean
     schema["DIABETES_NONINSULIN_BOOL"] = pl.Boolean
     schema["HTN_MEDS_BOOL"] = pl.Boolean
@@ -198,7 +208,7 @@ def main(in_file: str, out_file: str):
     Deduce the schema of `in_file` and store the result
     into an importable `out_file`
     """
-    _, schema = load_dataset(in_file)
+    schema = deduce_schema(in_file)
     logger.info(f"Finished deducing schema, now writing out to {out_file}")
     with open(out_file, "w") as f:
         f.write("import polars as pl\n")
