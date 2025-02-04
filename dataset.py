@@ -178,9 +178,6 @@ def preprocess(
     schema["DIABETES_NONINSULIN_BOOL"] = pl.Boolean
     schema["HTN_MEDS_BOOL"] = pl.Boolean
     schema["IVC_TIMING_BOOL"] = pl.Boolean
-    schema["SURGICAL_APPROACH_ENDOSCOPIC"] = pl.Boolean
-    schema["SURGICAL_APPROACH_LAPAROSCOPIC"] = pl.Boolean
-    schema["SURGICAL_APPROACH_OPEN"] = pl.Boolean
 
     return dataset, schema
 
