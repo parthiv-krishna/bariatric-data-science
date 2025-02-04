@@ -17,6 +17,9 @@ pl.enable_string_cache()
 logger = logging.getLogger(__name__)
 ray.init()  # for parallelization
 
+# if True, disables tuning of decision threshold
+FORCE_UNTUNED = False
+
 # for logistic regression
 TRAIN_SIZE = 0.75
 VAL_SIZE = 0.15
@@ -214,6 +217,9 @@ def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
     )
     model.fit(X_train, y_train)
 
+    if FORCE_UNTUNED:
+        model.best_threshold_ = 0.5
+
     train_score, train_confusion = get_score_and_confusion_matrix(
         model, X_train, y_train
     )
@@ -339,7 +345,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
         best_model_writer.writerow(
             [
                 "Decision Threshold Stability Ratio",
-                np.mean(thresholds) / np.std(thresholds),
+                np.mean(thresholds) / (np.std(thresholds) + EPS)
             ]
         )
 
