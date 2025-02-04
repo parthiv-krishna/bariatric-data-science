@@ -9,12 +9,13 @@ import polars as pl
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, TunedThresholdClassifierCV
 from sklearn.metrics import confusion_matrix, fbeta_score, make_scorer
-from tqdm import tqdm
+import ray
 
 import dataset
 
 pl.enable_string_cache()
 logger = logging.getLogger(__name__)
+ray.init()  # for parallelization
 
 # for logistic regression
 TRAIN_SIZE = 0.75
@@ -75,6 +76,7 @@ INFECTION = [
 ]
 
 
+@ray.remote
 def load_one(
     in_file: str, schema_path: str | None
 ) -> tuple[pl.LazyFrame, pl.LazyFrame, dict[str, pl.DataType]]:
@@ -83,7 +85,6 @@ def load_one(
     provided schema. If the schema is not provided, it will be deduced.
 
     """
-    logger.info(f"Loading dataset from {in_file}")
     data, schema = dataset.load_dataset(in_file, schema_path)
 
     # if any of the renal columns are >= 1, this is true
@@ -116,11 +117,18 @@ def load_all(
     Load all input files in the in_dir and stack into big X and y for
     logistic regression
     """
+    result_ids = []
+    for in_file in glob.glob(f"{in_dir}/*.txt"):
+        logger.info(f"Loading dataset from {in_file}")
+        result_ids.append(load_one.remote(in_file, schema_path))
+
+    results = ray.get(result_ids)
+    logger.info(f"Finished loading datasets")
+
     file_Xs = []
     file_ys = []
     schema = {}
-    for in_file in glob.glob(f"{in_dir}/*.txt"):
-        file_X, file_y, file_schema = load_one(in_file, schema_path)
+    for file_X, file_y, file_schema in results:
         file_Xs.append(file_X)
         file_ys.append(file_y)
 
@@ -184,6 +192,7 @@ def get_score_and_confusion_matrix(model: TunedThresholdClassifierCV, X, y_true)
     return f1_score(y_true, y_pred), confusion_matrix(y_true, y_pred)
 
 
+@ray.remote
 def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
     # split data into train and test
     X_train, X_val, y_train, y_val = train_test_split(
@@ -253,9 +262,12 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     # random sampling to train on different subsets of the train+val set
     np.random.seed(RANDOM_SEED)
     seeds = np.random.randint(1, 100000, NUM_ITERS)
-    results = [
-        logistic_regression(X_train_val, y_train_val, seed) for seed in tqdm(seeds)
+    logger.info(f"Running {NUM_ITERS} iterations of logistic regression training/validation")
+    result_ids = [
+        logistic_regression.remote(X_train_val, y_train_val, seed) for seed in seeds
     ]
+    results = ray.get(result_ids)
+    logger.info(f"Finished training logistic regression")
 
     # compute distribution of model parameters
     cols = X_train_val.columns
@@ -266,9 +278,11 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
 
     # write out distribution of model parameters
     thresholds = [r["threshold"] for r in results]
-    with open(f"{out_dir}/model_params_distribution.csv", "w", newline="") as f:
-        coefs_writer = csv.writer(f, delimiter=",")
-        coefs_writer.writerow(
+    model_params_distribution_filename = f"{out_dir}/model_params_distribution.csv"
+    logger.info(f"Writing model parameters distribution to {model_params_distribution_filename}")
+    with open(model_params_distribution_filename, "w", newline="") as f:
+        model_params_distribution_writer = csv.writer(f, delimiter=",")
+        model_params_distribution_writer.writerow(
             [
                 "Column Name",
                 "Mean Coefficient",
@@ -276,7 +290,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
                 "97.5 Percentile Coefficient",
             ]
         )
-        coefs_writer.writerow(
+        model_params_distribution_writer.writerow(
             [
                 "Decision Threshold",
                 np.mean(thresholds),
@@ -285,7 +299,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
             ]
         )
         for row in zip(cols, lower_bound, upper_bound, mean):
-            coefs_writer.writerow(row)
+            model_params_distribution_writer.writerow(row)
 
     # select best model based on the F1 score on the validation set
     best = max(results, key=lambda r: r["val_score"])
@@ -293,10 +307,12 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     # get prediction metrics for the best model
     train_metrics = best["train_score"], best["train_confusion"]
     val_metrics = best["val_score"], best["val_confusion"]
-    test_metrics = get_score_and_confusion_matrix(best["estimator"], X_test, y_test)
+    test_metrics = get_score_and_confusion_matrix(best["estimator"], X_test.to_numpy(), y_test.to_numpy())
 
     # write out prediction metrics and coefficients for the best model
-    with open(f"{out_dir}/best_model.csv", "w", newline="") as f:
+    best_model_filename = f"{out_dir}/best_model.csv"
+    logger.info(f"Writing metrics for best model to {best_model_filename}")
+    with open(best_model_filename, "w", newline="") as f:
         best_model_writer = csv.writer(f)
         best_model_writer.writerow(["Name", "Value"])
 
@@ -313,12 +329,19 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
             correct = (tn + tp) / (tn + fp + fn + tp)
 
             best_model_writer.writerow([f"{name} Precision", precision])
-            best_model_writer.writerow([f"{name} Recall/Sensitivity", recall_sensitivity])
+            best_model_writer.writerow(
+                [f"{name} Recall/Sensitivity", recall_sensitivity]
+            )
             best_model_writer.writerow([f"{name} Specificity", specificity])
             best_model_writer.writerow([f"{name} Correct Prediction Rate", correct])
 
         best_model_writer.writerow(["Decision Threshold", best["threshold"]])
-        best_model_writer.writerow(["Decision Threshold Stability Ratio", np.mean(thresholds)/np.std(thresholds)])
+        best_model_writer.writerow(
+            [
+                "Decision Threshold Stability Ratio",
+                np.mean(thresholds) / np.std(thresholds),
+            ]
+        )
 
         for col, coef in zip(cols, best["coefs"]):
             best_model_writer.writerow([f"{col} Coefficient", coef])
