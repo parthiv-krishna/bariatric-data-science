@@ -8,7 +8,12 @@ import numpy as np
 import polars as pl
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, TunedThresholdClassifierCV
-from sklearn.metrics import confusion_matrix, fbeta_score, make_scorer
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    confusion_matrix,
+    f1_score,
+    make_scorer,
+)
 import ray
 
 import dataset
@@ -20,7 +25,11 @@ ray.init()  # for parallelization
 # if True, disables tuning of decision threshold
 FORCE_UNTUNED = False
 
-# for logistic regression
+# if True, uses F1 score (balances precision/recall)
+# if False, uses balanced score (balances sensitivity/specificity)
+USE_F1_SCORE = False
+
+# hyperparameters for logistic regression
 TRAIN_SIZE = 0.75
 VAL_SIZE = 0.15
 TEST_SIZE = 0.1
@@ -183,16 +192,17 @@ def preprocess(X: pl.LazyFrame, y: pl.LazyFrame) -> tuple[pl.DataFrame, pl.DataF
     return X, y
 
 
-# F1 balances precision and recall
-def f1_score(y_true, y_pred):
-    return fbeta_score(y_true, y_pred, beta=1, pos_label=1)
+def get_score(y_true, y_pred):
+    if USE_F1_SCORE:
+        return f1_score(y_true, y_pred)
+    return balanced_accuracy_score(y_true, y_pred)
 
 
 def get_score_and_confusion_matrix(model: TunedThresholdClassifierCV, X, y_true):
     # check accuracy of the model on the test set
     y_pred = model.predict_proba(X)[:, 1] >= model.best_threshold_
 
-    return f1_score(y_true, y_pred), confusion_matrix(y_true, y_pred)
+    return get_score(y_true, y_pred), confusion_matrix(y_true, y_pred)
 
 
 @ray.remote
@@ -209,7 +219,7 @@ def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
     y_train = y_train.ravel()
     y_val = y_val.ravel()
 
-    f1_scorer = make_scorer(f1_score)
+    f1_scorer = make_scorer(get_score)
 
     # fit logistic regression model with tuned threshold
     model = TunedThresholdClassifierCV(
@@ -268,7 +278,9 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     # random sampling to train on different subsets of the train+val set
     np.random.seed(RANDOM_SEED)
     seeds = np.random.randint(1, 100000, NUM_ITERS)
-    logger.info(f"Running {NUM_ITERS} iterations of logistic regression training/validation")
+    logger.info(
+        f"Running {NUM_ITERS} iterations of logistic regression training/validation"
+    )
     result_ids = [
         logistic_regression.remote(X_train_val, y_train_val, seed) for seed in seeds
     ]
@@ -285,7 +297,9 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     # write out distribution of model parameters
     thresholds = [r["threshold"] for r in results]
     model_params_distribution_filename = f"{out_dir}/model_params_distribution.csv"
-    logger.info(f"Writing model parameters distribution to {model_params_distribution_filename}")
+    logger.info(
+        f"Writing model parameters distribution to {model_params_distribution_filename}"
+    )
     with open(model_params_distribution_filename, "w", newline="") as f:
         model_params_distribution_writer = csv.writer(f, delimiter=",")
         model_params_distribution_writer.writerow(
@@ -304,16 +318,18 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
                 np.percentile(thresholds, 97.5),
             ]
         )
-        for row in zip(cols, lower_bound, upper_bound, mean):
+        for row in zip(cols, mean, lower_bound, upper_bound):
             model_params_distribution_writer.writerow(row)
 
-    # select best model based on the F1 score on the validation set
+    # select best model based on the score on the validation set
     best = max(results, key=lambda r: r["val_score"])
 
     # get prediction metrics for the best model
     train_metrics = best["train_score"], best["train_confusion"]
     val_metrics = best["val_score"], best["val_confusion"]
-    test_metrics = get_score_and_confusion_matrix(best["estimator"], X_test.to_numpy(), y_test.to_numpy())
+    test_metrics = get_score_and_confusion_matrix(
+        best["estimator"], X_test.to_numpy(), y_test.to_numpy()
+    )
 
     # write out prediction metrics and coefficients for the best model
     best_model_filename = f"{out_dir}/best_model.csv"
@@ -334,6 +350,10 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
             specificity = tn / (tn + fp)
             correct = (tn + tp) / (tn + fp + fn + tp)
 
+            best_model_writer.writerow([f"{name} True Negatives", tn])
+            best_model_writer.writerow([f"{name} True Positives", tp])
+            best_model_writer.writerow([f"{name} False Negatives", fn])
+            best_model_writer.writerow([f"{name} False Positives", fp])
             best_model_writer.writerow([f"{name} Precision", precision])
             best_model_writer.writerow(
                 [f"{name} Recall/Sensitivity", recall_sensitivity]
@@ -345,7 +365,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
         best_model_writer.writerow(
             [
                 "Decision Threshold Stability Ratio",
-                np.mean(thresholds) / (np.std(thresholds) + EPS)
+                np.mean(thresholds) / (np.std(thresholds) + EPS),
             ]
         )
 
