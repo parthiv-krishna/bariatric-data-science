@@ -219,39 +219,45 @@ def compute_metrics(
     tn: int, fp: int, fn: int, tp: int
 ) -> tuple[float, float, float, float]:
 
-    precision = tp / (tp + fp)
-    recall_sensitivity = tp / (tp + fn)
-    specificity = tn / (tn + fp)
+    precision = tp / (tp + fp) if (tp + fp) != 0 else 1
+    recall_sensitivity = tp / (tp + fn) if (tp + fn) != 0 else 0
+    specificity = tn / (tn + fp) if (tn + fp) != 0 else 0
     correct = (tn + tp) / (tn + fp + fn + tp)
 
     return precision, recall_sensitivity, specificity, correct
 
 
-def create_tuning_plot(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
-    thresholds = np.linspace(0.01, 0.99, 99)
-    scores = []
-    precisions = []
-    recall_sensitivies = []
-    specificities = []
-    corrects = []
-    for threshold in thresholds:
+def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
+    selected_threshold = model.best_threshold_
+    selected_threshold_idx = None
+
+    thresholds = np.linspace(0, 1, 101)
+    scores = np.zeros_like(thresholds)
+    precisions = np.zeros_like(thresholds)
+    recall_sensitivies = np.zeros_like(thresholds)
+    specificities = np.zeros_like(thresholds)
+    corrects = np.zeros_like(thresholds)
+    for i, threshold in enumerate(thresholds):
         score, confusion = get_score_and_confusion_matrix(model, X, y_true, threshold)
         precision, recall_sensitivity, specificity, correct = compute_metrics(
             *(confusion.ravel())
         )
 
-        scores.append(score)
-        precisions.append(precision)
-        recall_sensitivies.append(recall_sensitivity)
-        specificities.append(specificity)
-        corrects.append(correct)
+        scores[i] = score
+        precisions[i] = precision
+        recall_sensitivies[i] = recall_sensitivity
+        specificities[i] = specificity
+        corrects[i] = correct
 
-    selected_threshold = model.best_threshold_
+        if selected_threshold_idx is None and threshold > selected_threshold:
+            selected_threshold_idx = i
 
-    plt.figure()
+
+    # tuning chart - performance on various metrics vs. threshold
+    plt.figure(figsize=(8, 6))
+    plt.title("Logistic Regression Parameter Tuning")
     plt.xlabel("Logistic Regression Decision Threshold")
     plt.ylabel("Model Performance on the Training Set")
-    plt.title("Logistic Regression Parameter Tuning")
 
     plt.plot(
         thresholds,
@@ -262,15 +268,36 @@ def create_tuning_plot(model: TunedThresholdClassifierCV, X, y_true, out_dir: st
     plt.plot(thresholds, recall_sensitivies, label="Sensitivity (Recall)")
     plt.plot(thresholds, specificities, label="Specificity")
     plt.plot(thresholds, corrects, label="Correct Prediction Rate")
-    plt.plot([selected_threshold, selected_threshold], [0, 1], label="Selected Threshold", linestyle="dashed")
+    plt.plot(
+        [selected_threshold, selected_threshold],
+        [0, 1],
+        label="Selected Threshold",
+        linestyle="dashed",
+    )
 
     plt.legend()
     plt.tight_layout()
 
-    plt.show()
-    filename = f"{out_dir}/tuning.png" 
+    filename = f"{out_dir}/tuning.png"
     plt.savefig(filename)
     logger.info(f"Saved tuning plot to {filename}")
+
+    # ROC - true positive rate vs. false positive rate
+    plt.figure(figsize=(8, 6))
+    plt.title("Receiver Operating Characteristic")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+
+    plt.plot(1 - specificities, recall_sensitivies, label="ROC")
+    plt.plot(thresholds, thresholds, linestyle="dashed")
+    plt.scatter(1 - specificities[selected_threshold_idx], recall_sensitivies[selected_threshold_idx], label="Selected Threshold")
+
+    plt.legend()
+    plt.tight_layout()
+
+    filename = f"{out_dir}/roc.png"
+    plt.savefig(filename)
+    logger.info(f"Saved ROC to {filename}")
 
 
 @ray.remote
@@ -320,6 +347,8 @@ def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
 
 def main(in_dir: str, out_dir: str, schema_path: str | None):
     """Runs the experiment"""
+
+    os.makedirs(out_dir, exist_ok=True)
 
     # load and preprocess data
     X, y, _ = load_all(in_dir, schema_path)
@@ -442,7 +471,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
         for col, coef in zip(cols, best["coefs"]):
             best_model_writer.writerow([f"{col} Coefficient", coef])
 
-    create_tuning_plot(best["model"], best["X_train"], best["y_train"], out_dir)
+    create_plots(best["model"], best["X_train"], best["y_train"], out_dir)
 
 
 if __name__ == "__main__":
