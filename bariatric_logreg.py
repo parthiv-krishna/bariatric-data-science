@@ -232,10 +232,12 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
     selected_threshold = model.best_threshold_
     selected_threshold_idx = None
 
+    chance_level = np.sum(y_true) / np.shape(y_true)[0]
+
     thresholds = np.linspace(0, 1, 101)
     scores = np.zeros_like(thresholds)
     precisions = np.zeros_like(thresholds)
-    recall_sensitivies = np.zeros_like(thresholds)
+    recall_sensitivities = np.zeros_like(thresholds)
     specificities = np.zeros_like(thresholds)
     corrects = np.zeros_like(thresholds)
     for i, threshold in enumerate(thresholds):
@@ -246,7 +248,7 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
 
         scores[i] = score
         precisions[i] = precision
-        recall_sensitivies[i] = recall_sensitivity
+        recall_sensitivities[i] = recall_sensitivity
         specificities[i] = specificity
         corrects[i] = correct
 
@@ -266,7 +268,7 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
         label="F1 Score" if USE_F1_SCORE else "Balanced Accuracy Score",
     )
     plt.plot(thresholds, precisions, label="Precision")
-    plt.plot(thresholds, recall_sensitivies, label="Sensitivity (Recall)")
+    plt.plot(thresholds, recall_sensitivities, label="Sensitivity (Recall)")
     plt.plot(thresholds, specificities, label="Specificity")
     plt.plot(thresholds, corrects, label="Correct Prediction Rate")
     plt.plot(
@@ -289,9 +291,9 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
 
-    plt.plot(1 - specificities, recall_sensitivies, label="ROC")
-    plt.plot(thresholds, thresholds, linestyle="dashed")
-    plt.scatter(1 - specificities[selected_threshold_idx], recall_sensitivies[selected_threshold_idx], label="Selected Threshold")
+    plt.plot(1 - specificities, recall_sensitivities, label="ROC")
+    plt.plot(thresholds, thresholds, label="Random Classifier", linestyle="dashed")
+    plt.scatter(1 - specificities[selected_threshold_idx], recall_sensitivities[selected_threshold_idx], label="Selected Threshold")
 
     plt.legend()
     plt.tight_layout()
@@ -299,6 +301,23 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
     filename = f"{out_dir}/roc.png"
     plt.savefig(filename)
     logger.info(f"Saved ROC to {filename}")
+
+    # precision-recall - precision vs. recall
+    plt.figure(figsize=(8, 6))
+    plt.title("Precision-Recall Curve")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+
+    plt.plot(recall_sensitivities, precisions, label="PR Curve")
+    plt.plot([0, 1], [chance_level, chance_level], label="Chance Level", linestyle="dashed")
+    plt.scatter(recall_sensitivities[selected_threshold_idx], precisions[selected_threshold_idx], label="Selected Threshold")
+
+    plt.legend()
+    plt.tight_layout()
+
+    filename = f"{out_dir}/precision_recall.png"
+    plt.savefig(filename)
+    logger.info(f"Saved precision-recall curve to {filename}")
 
 
 def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
