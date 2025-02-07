@@ -2,6 +2,7 @@
 let
   python-packages = ps: with ps; [
     black
+    matplotlib
     numpy
     pandas
     polars

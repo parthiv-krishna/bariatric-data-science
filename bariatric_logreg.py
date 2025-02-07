@@ -3,8 +3,9 @@ import csv
 import glob
 import itertools
 import logging
-from multiprocessing import Pool
+import matplotlib.pyplot as plt
 import numpy as np
+import os
 import polars as pl
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, TunedThresholdClassifierCV
@@ -33,9 +34,13 @@ USE_F1_SCORE = False
 TRAIN_SIZE = 0.75
 VAL_SIZE = 0.15
 TEST_SIZE = 0.1
-RANDOM_SEED = 1729
 NUM_ITERS = 1000
+
+# https://en.wikipedia.org/wiki/Srinivasa_Ramanujan#Hardy%E2%80%93Ramanujan_number_1729
+RANDOM_SEED = 1729
+# prevent divide by 0
 EPS = 1e-6
+
 
 RENAL = [
     "DIALYSIS",
@@ -198,11 +203,74 @@ def get_score(y_true, y_pred):
     return balanced_accuracy_score(y_true, y_pred)
 
 
-def get_score_and_confusion_matrix(model: TunedThresholdClassifierCV, X, y_true):
+def get_score_and_confusion_matrix(
+    model: TunedThresholdClassifierCV, X, y_true, threshold=None
+):
+    if threshold == None:
+        threshold = model.best_threshold_
+
     # check accuracy of the model on the test set
-    y_pred = model.predict_proba(X)[:, 1] >= model.best_threshold_
+    y_pred = model.predict_proba(X)[:, 1] >= threshold
 
     return get_score(y_true, y_pred), confusion_matrix(y_true, y_pred)
+
+
+def compute_metrics(
+    tn: int, fp: int, fn: int, tp: int
+) -> tuple[float, float, float, float]:
+
+    precision = tp / (tp + fp)
+    recall_sensitivity = tp / (tp + fn)
+    specificity = tn / (tn + fp)
+    correct = (tn + tp) / (tn + fp + fn + tp)
+
+    return precision, recall_sensitivity, specificity, correct
+
+
+def create_tuning_plot(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
+    thresholds = np.linspace(0.01, 0.99, 99)
+    scores = []
+    precisions = []
+    recall_sensitivies = []
+    specificities = []
+    corrects = []
+    for threshold in thresholds:
+        score, confusion = get_score_and_confusion_matrix(model, X, y_true, threshold)
+        precision, recall_sensitivity, specificity, correct = compute_metrics(
+            *(confusion.ravel())
+        )
+
+        scores.append(score)
+        precisions.append(precision)
+        recall_sensitivies.append(recall_sensitivity)
+        specificities.append(specificity)
+        corrects.append(correct)
+
+    selected_threshold = model.best_threshold_
+
+    plt.figure()
+    plt.xlabel("Logistic Regression Decision Threshold")
+    plt.ylabel("Model Performance on the Training Set")
+    plt.title("Logistic Regression Parameter Tuning")
+
+    plt.plot(
+        thresholds,
+        scores,
+        label="F1 Score" if USE_F1_SCORE else "Balanced Accuracy Score",
+    )
+    plt.plot(thresholds, precisions, label="Precision")
+    plt.plot(thresholds, recall_sensitivies, label="Sensitivity (Recall)")
+    plt.plot(thresholds, specificities, label="Specificity")
+    plt.plot(thresholds, corrects, label="Correct Prediction Rate")
+    plt.plot([selected_threshold, selected_threshold], [0, 1], label="Selected Threshold", linestyle="dashed")
+
+    plt.legend()
+    plt.tight_layout()
+
+    plt.show()
+    filename = f"{out_dir}/tuning.png" 
+    plt.savefig(filename)
+    logger.info(f"Saved tuning plot to {filename}")
 
 
 @ray.remote
@@ -236,13 +304,17 @@ def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
     val_score, val_confusion = get_score_and_confusion_matrix(model, X_val, y_val)
 
     return {
-        "estimator": model,
+        "model": model,
         "coefs": model.estimator_.coef_[0],
         "threshold": model.best_threshold_,
         "train_score": train_score,
         "train_confusion": train_confusion,
         "val_score": val_score,
         "val_confusion": val_confusion,
+        "X_train": X_train,
+        "y_train": y_train,
+        "X_val": X_val,
+        "y_val": y_val,
     }
 
 
@@ -328,7 +400,7 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     train_metrics = best["train_score"], best["train_confusion"]
     val_metrics = best["val_score"], best["val_confusion"]
     test_metrics = get_score_and_confusion_matrix(
-        best["estimator"], X_test.to_numpy(), y_test.to_numpy()
+        best["model"], X_test.to_numpy(), y_test.to_numpy()
     )
 
     # write out prediction metrics and coefficients for the best model
@@ -344,11 +416,9 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
             score, confusion = metrics
 
             tn, fp, fn, tp = confusion.ravel()
-
-            precision = tp / (tp + fp)
-            recall_sensitivity = tp / (tp + fn)
-            specificity = tn / (tn + fp)
-            correct = (tn + tp) / (tn + fp + fn + tp)
+            precision, recall_sensitivity, specificity, correct = compute_metrics(
+                tn, fp, fn, tp
+            )
 
             best_model_writer.writerow([f"{name} True Negatives", tn])
             best_model_writer.writerow([f"{name} True Positives", tp])
@@ -371,6 +441,8 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
 
         for col, coef in zip(cols, best["coefs"]):
             best_model_writer.writerow([f"{col} Coefficient", coef])
+
+    create_tuning_plot(best["model"], best["X_train"], best["y_train"], out_dir)
 
 
 if __name__ == "__main__":
