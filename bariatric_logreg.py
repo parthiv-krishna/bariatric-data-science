@@ -16,6 +16,7 @@ from sklearn.metrics import (
     make_scorer,
 )
 import ray
+from tqdm import tqdm
 
 import dataset
 
@@ -300,7 +301,6 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
     logger.info(f"Saved ROC to {filename}")
 
 
-@ray.remote
 def logistic_regression(X: pl.DataFrame, y: pl.DataFrame, seed: int):
     # split data into train and test
     X_train, X_val, y_train, y_val = train_test_split(
@@ -382,10 +382,9 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
     logger.info(
         f"Running {NUM_ITERS} iterations of logistic regression training/validation"
     )
-    result_ids = [
-        logistic_regression.remote(X_train_val, y_train_val, seed) for seed in seeds
+    results = [
+        logistic_regression(X_train_val, y_train_val, seed) for seed in tqdm(seeds)
     ]
-    results = ray.get(result_ids)
     logger.info(f"Finished training logistic regression")
 
     # compute distribution of model parameters

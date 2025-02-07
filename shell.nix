@@ -11,6 +11,7 @@ let
     ray
     scikit-learn
     scipy
+    tqdm
   ];
   python-with-packages = pkgs.python3.withPackages python-packages;
 in pkgs.mkShell {
