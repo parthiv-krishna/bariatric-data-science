@@ -195,6 +195,13 @@ def preprocess(X: pl.LazyFrame, y: pl.LazyFrame) -> tuple[pl.DataFrame, pl.DataF
         ]
     )
 
+    # merge laparoscopic columns
+    X = X.with_columns(
+            pl.Expr.or_(pl.col("SURGICAL_APPROACH=conventional laparoscopic (thoracoscopic)") != 0, pl.col("SURGICAL_APPROACH=laparoscopic") != 0, pl.col("SURGICAL_APPROACH=laparoscopic assisted (thoracoscopic assisted)") != 0).alias("SURGICAL_APPROACH=laparoscopic")
+    )
+    X = X.drop("SURGICAL_APPROACH=conventional laparoscopic (thoracoscopic)")
+    X = X.drop("SURGICAL_APPROACH=laparoscopic assisted (thoracoscopic assisted)")
+
     return X, y
 
 
@@ -255,7 +262,6 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
         if selected_threshold_idx is None and threshold > selected_threshold:
             selected_threshold_idx = i
 
-
     # tuning chart - performance on various metrics vs. threshold
     plt.figure(figsize=(8, 6))
     plt.title("Logistic Regression Parameter Tuning")
@@ -293,7 +299,11 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
 
     plt.plot(1 - specificities, recall_sensitivities, label="ROC")
     plt.plot(thresholds, thresholds, label="Random Classifier", linestyle="dashed")
-    plt.scatter(1 - specificities[selected_threshold_idx], recall_sensitivities[selected_threshold_idx], label="Selected Threshold")
+    plt.scatter(
+        1 - specificities[selected_threshold_idx],
+        recall_sensitivities[selected_threshold_idx],
+        label="Selected Threshold",
+    )
 
     plt.legend()
     plt.tight_layout()
@@ -309,8 +319,14 @@ def create_plots(model: TunedThresholdClassifierCV, X, y_true, out_dir: str):
     plt.ylabel("Precision")
 
     plt.plot(recall_sensitivities, precisions, label="PR Curve")
-    plt.plot([0, 1], [chance_level, chance_level], label="Chance Level", linestyle="dashed")
-    plt.scatter(recall_sensitivities[selected_threshold_idx], precisions[selected_threshold_idx], label="Selected Threshold")
+    plt.plot(
+        [0, 1], [chance_level, chance_level], label="Chance Level", linestyle="dashed"
+    )
+    plt.scatter(
+        recall_sensitivities[selected_threshold_idx],
+        precisions[selected_threshold_idx],
+        label="Selected Threshold",
+    )
 
     plt.legend()
     plt.tight_layout()
@@ -488,6 +504,20 @@ def main(in_dir: str, out_dir: str, schema_path: str | None):
 
         for col, coef in zip(cols, best["coefs"]):
             best_model_writer.writerow([f"{col} Coefficient", coef])
+
+    with open(f"{out_dir}/counts.csv", "w") as f:
+        counts_writer = csv.writer(f)
+        counts_writer.writerow(["Column Name", "Count Nonzero"])
+        N = X_preproc.shape[0]
+        counts_writer.writerow(["N Total", N])
+        counts_writer.writerow(["N Train", round(N * TRAIN_SIZE)])
+        counts_writer.writerow(["N Val", round(N * VAL_SIZE)])
+        counts_writer.writerow(["N Test", round(N * TEST_SIZE)])
+
+        for col in cols:
+            is_nonzero = (pl.col(col) != 0)
+            count = X_preproc.filter(is_nonzero).shape[0]
+            counts_writer.writerow([col, count])
 
     create_plots(best["model"], best["X_train"], best["y_train"], out_dir)
 
